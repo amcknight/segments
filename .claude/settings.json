@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(spinlab:*)",
+      "Bash(curl -s http://localhost:15483/*)",
+      "Bash(curl -s http://localhost:15482/*)",
+      "WebFetch(domain:docs.libretro.com)",
+      "WebFetch(domain:www.mesen.ca)",
+      "PowerShell(python pgm_inspect_v07.py --fit-n 150 --seed 0 --pin tau_ssp=80 --pin sf_1=0.20 --out tmp/v07_pinned.html)",
+      "PowerShell(python pgm_inspect_v07.py --fit-n 150 --seed 0 --pin tau_ssp=80 --pin sf_1=0.20 --out tmp/v07_pinned.html 2>&1)",
+      "Bash(ls c:/Users/thedo/git/segments/memory/ 2>/dev/null; echo \"---\"; cat c:/Users/thedo/git/segments/MEMORY.md 2>/dev/null; echo \"---\"; ls c:/Users/thedo/.claude/projects/c--Users-thedo-git-segments/memory/ 2>/dev/null)",
+      "Read(//c/Users/thedo/.claude/projects/c--Users-thedo-git-segments/memory/**)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\thedo\\.claude\\projects\\c--Users-thedo-git-segments\\memory"
+    ]
+  },
+  "enabledPlugins": {
+    "playwright@claude-plugins-official": true
+  }
+}
