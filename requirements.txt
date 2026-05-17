@@ -1,0 +1,5 @@
+numpy>=2,<3
+scipy>=1.15,<2
+jax>=0.10
+jaxopt>=0.8
+pytest>=8
