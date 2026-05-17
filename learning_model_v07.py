@@ -84,6 +84,9 @@ PRIOR_LOG_ALPHA_1_MEAN,        PRIOR_LOG_ALPHA_1_SD        = np.log(1.0),     0.
 PRIOR_LOG_HALFLIFE_SF_MEAN                                 = np.log(28.0)
 PRIOR_LOG_HALFLIFE_SSP_MEAN                                = np.log(28.0)
 PRIOR_LOG_HALFLIFE_ALPHA_MEAN                              = np.log(14.0)
+# Note: the synth TRUTH_DEFAULTS use ssp_halflife=55, not 28. Mismatch is
+# intentional: the data is fake, the broad prior + EB pool should learn the
+# offset from per-segment data. Don't move the prior to match the synth.
 
 # Joint prior on (A, halflife): sigma_halflife is a function of |A|.
 # ---------------------------------------------------------------------------
@@ -103,6 +106,20 @@ HALFLIFE_SIGMA_MIN = 0.05
 HALFLIFE_SIGMA_MAX = 0.50
 
 
+_SMOOTH_ABS_EPS = 1e-2
+
+
+def _smooth_abs(A, eps=_SMOOTH_ABS_EPS):
+    """Twice-differentiable approximation to |A|. Equals 0 at A=0 exactly
+    (so halflife_sigma(0) == sigma_min on the nose) and approaches |A| for
+    |A| >> eps. The eps-scale smoothing kills the JAX-autodiff Hessian bug
+    that |A| produces at A=0: the MAP can land at A=0 (no-learning regime),
+    and there autodiff'd d²/dA² |A| is wrong (formally a Dirac). With this
+    smoothing the second derivative is 1/eps at A=0 — large but finite,
+    matching the true cusp-limit prior."""
+    return np.sqrt(A * A + eps * eps) - eps
+
+
 def halflife_sigma(A, sigma_max=HALFLIFE_SIGMA_MAX, sigma_min=HALFLIFE_SIGMA_MIN):
     """Conditional prior SD on log(halflife) given amplitude A.
 
@@ -113,7 +130,7 @@ def halflife_sigma(A, sigma_max=HALFLIFE_SIGMA_MAX, sigma_min=HALFLIFE_SIGMA_MIN
     Smaller sigma_max means a tighter prior at large |A| too, which is what
     pooling buys you.
     """
-    return sigma_min + (sigma_max - sigma_min) * np.tanh(np.abs(A))
+    return sigma_min + (sigma_max - sigma_min) * np.tanh(_smooth_abs(A))
 
 
 def haz1():
@@ -171,23 +188,26 @@ def log_likelihood(theta, data, hazard):
 
 
 def log_prior(theta, hazard,
-              halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None):
+              halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None,
+              halflife_ssp_pop_mean=None, halflife_ssp_pop_sigma=None,
+              halflife_alpha_pop_mean=None, halflife_alpha_pop_sigma=None):
     """V07 owns all priors -- does not delegate to hazard.log_prior.
 
     Halflife priors are joint with their respective A = log(theta_1) - log(theta_inf).
     See halflife_sigma() and the module docstring for rationale.
 
     Pool override (empirical Bayes):
-        halflife_sf_pop_mean, halflife_sf_pop_sigma -- if both provided, use as
-        the per-segment prior on log(halflife_sf) in place of module defaults.
-        These come from a multi-segment EB fit. ssp and alpha halflives keep
-        module defaults (extending the pool to them is mechanical -- add
-        analogous kwargs).
+        For each of {sf, ssp, alpha}, halflife_<x>_pop_mean and
+        halflife_<x>_pop_sigma override the per-segment prior on
+        log(halflife_<x>) when both are provided. These come from a
+        multi-segment EB fit. Pooling all three is symmetric machinery.
     """
-    hl_sf_mean = (halflife_sf_pop_mean if halflife_sf_pop_mean is not None
-                  else PRIOR_LOG_HALFLIFE_SF_MEAN)
-    hl_sf_sigma_max = (halflife_sf_pop_sigma if halflife_sf_pop_sigma is not None
-                       else HALFLIFE_SIGMA_MAX)
+    hl_sf_mean   = (halflife_sf_pop_mean    if halflife_sf_pop_mean    is not None else PRIOR_LOG_HALFLIFE_SF_MEAN)
+    hl_sf_sigma  = (halflife_sf_pop_sigma   if halflife_sf_pop_sigma   is not None else HALFLIFE_SIGMA_MAX)
+    hl_ssp_mean  = (halflife_ssp_pop_mean   if halflife_ssp_pop_mean   is not None else PRIOR_LOG_HALFLIFE_SSP_MEAN)
+    hl_ssp_sigma = (halflife_ssp_pop_sigma  if halflife_ssp_pop_sigma  is not None else HALFLIFE_SIGMA_MAX)
+    hl_a_mean    = (halflife_alpha_pop_mean if halflife_alpha_pop_mean is not None else PRIOR_LOG_HALFLIFE_ALPHA_MEAN)
+    hl_a_sigma   = (halflife_alpha_pop_sigma if halflife_alpha_pop_sigma is not None else HALFLIFE_SIGMA_MAX)
 
     lp = 0.0
     lp += norm.logpdf(theta[IDX_LOG_BPT],        PRIOR_LOG_BPT_MEAN,       PRIOR_LOG_BPT_SD)
@@ -201,20 +221,23 @@ def log_prior(theta, hazard,
     A_sf  = theta[IDX_LOG_SF_1]    - theta[IDX_LOG_SF_INF]
     A_ssp = theta[IDX_LOG_SSP_1]   - theta[IDX_LOG_SSP_INF]
     A_a   = theta[IDX_LOG_ALPHA_1] - theta[IDX_LOG_ALPHA_INF]
-    lp += norm.logpdf(theta[IDX_LOG_HALFLIFE_SF],
-                      hl_sf_mean,                    halflife_sigma(A_sf, sigma_max=hl_sf_sigma_max))
-    lp += norm.logpdf(theta[IDX_LOG_HALFLIFE_SSP],
-                      PRIOR_LOG_HALFLIFE_SSP_MEAN,   halflife_sigma(A_ssp))
-    lp += norm.logpdf(theta[IDX_LOG_HALFLIFE_ALPHA],
-                      PRIOR_LOG_HALFLIFE_ALPHA_MEAN, halflife_sigma(A_a))
+    lp += norm.logpdf(theta[IDX_LOG_HALFLIFE_SF],    hl_sf_mean,  halflife_sigma(A_sf,  sigma_max=hl_sf_sigma))
+    lp += norm.logpdf(theta[IDX_LOG_HALFLIFE_SSP],   hl_ssp_mean, halflife_sigma(A_ssp, sigma_max=hl_ssp_sigma))
+    lp += norm.logpdf(theta[IDX_LOG_HALFLIFE_ALPHA], hl_a_mean,   halflife_sigma(A_a,   sigma_max=hl_a_sigma))
     return float(lp)
 
 
 def log_posterior(theta, data, hazard,
-                  halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None):
+                  halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None,
+                  halflife_ssp_pop_mean=None, halflife_ssp_pop_sigma=None,
+                  halflife_alpha_pop_mean=None, halflife_alpha_pop_sigma=None):
     lp = log_prior(theta, hazard,
                    halflife_sf_pop_mean=halflife_sf_pop_mean,
-                   halflife_sf_pop_sigma=halflife_sf_pop_sigma)
+                   halflife_sf_pop_sigma=halflife_sf_pop_sigma,
+                   halflife_ssp_pop_mean=halflife_ssp_pop_mean,
+                   halflife_ssp_pop_sigma=halflife_ssp_pop_sigma,
+                   halflife_alpha_pop_mean=halflife_alpha_pop_mean,
+                   halflife_alpha_pop_sigma=halflife_alpha_pop_sigma)
     if not np.isfinite(lp):
         return -np.inf
     ll = log_likelihood(theta, data, hazard)

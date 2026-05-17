@@ -1,5 +1,93 @@
 # Changelog
 
+## 2026-05-17 — PPC, NUTS, full halflife pool, smooth-abs bugfix, fit_core refactor, cleanup
+
+Major session. Completed steps 1-3 of plan_forward_sequence; deferred step 4
+(API contract) until shape-param learning is settled.
+
+### New capability
+
+- **PPC infrastructure** ([ppc.py](ppc.py)): vectorized forward simulator,
+  4 discrepancy stats (died_rate, tau skew/kurt, mid-third), mid-p Bayes
+  p-value. 8 tests in [tests/test_ppc.py](tests/test_ppc.py). 2×2 sanity
+  check ([tmp/ppc_synth_check.py](tmp/ppc_synth_check.py)) confirms haz1-
+  on-beta2-truth caught at p≈0.008 on the mid-third stat with no false
+  alarms on the other three cells.
+- **NUTS via NumPyro** ([fit_nuts.py](fit_nuts.py)): wraps the JAX
+  `log_posterior` via `ImproperUniform + factor`. `posterior_samples()` is
+  the auto-fallback (Laplace where PD, NUTS otherwise). 7 tests in
+  [tests/test_nuts.py](tests/test_nuts.py). Bench: NUTS 23-453s depending
+  on N and model; Laplace stays <2s.
+- **Full halflife pool** ([fit_eb_pool.py](fit_eb_pool.py)): `Pool` extended
+  from 2→6 fields covering sf/ssp/alpha × mean/sigma. All priors and fit
+  modules accept 6 pool kwargs symmetrically. 5 new tests covering ssp/
+  alpha population recovery, regime-1 shrinkage, and multi-pool
+  independence.
+
+### Bugfixes
+
+- **|A| Hessian autodiff bug** (`halflife_sigma`): `jnp.abs(A)` corrupted
+  the second derivative at A=0 (the no-learning MAP). Caused 4/5 cells in
+  the NUTS bench to fail Laplace PD on well-spec data. Replaced with
+  `smooth_abs(A) = sqrt(A² + ε²) - ε`. Documented in
+  [external_docs/pgm_tricks.md](external_docs/pgm_tricks.md) "Smooth-once
+  isn't smooth-twice". Regression test in
+  [tests/test_joint_prior.py](tests/test_joint_prior.py) verified to fail
+  when reintroduced.
+- **EB σ collapse**: iterative both-parameter EB algorithm pegged σ_pop at
+  the floor (0.05) regardless of true population spread, via the feedback
+  loop σ↓ → MAPs↓ → std(MAPs)↓. Switched to one-step σ (estimated once
+  from broad-prior MAPs) + iterated μ. Honest SD-reduction numbers replace
+  the inflated 68-86% figures. Documented in pgm_tricks.md "EB σ collapse
+  — iterate the mean, fix the scale".
+
+### Architecture
+
+- **[fit_core.py](fit_core.py)**: generic fit machinery parametrized over
+  the model module. `fit_jax.py` and `fit_jax_beta2.py` are now thin
+  shims (warm_init + binding). Adding a third hazard model is ~30-50
+  lines. JIT cache stays tight via `lru_cache` on the model identity.
+- **Public API surface** in `segments_v07.py` updated: `Pool` now exposes
+  6 fields with `as_kwargs()` convenience.
+
+### Calibration probes (new diagnostic infrastructure)
+
+[tmp/calibration_probes.py](tmp/calibration_probes.py) — four self-
+consistency probes enabled by PPC + NUTS:
+1. Hessian autodiff vs FD agreement — would have caught the |A| bug
+   (8/8 seeds clean post-fix).
+2. NUTS-vs-Laplace SD agreement across many seeds.
+3. Well-spec PPC p-value distribution — shape stats ~uniform (KS 0.10-0.15).
+4. **Posterior coverage** — 90% NUTS interval contains truth across 20
+   seeds. Result: 9/10 dims ≥0.85; `log_hl_ssp` at 0.70 (under-coverage
+   from joint-prior collapse × ssp prior/truth offset; documented in
+   memory/coverage-finding.md — known design trade-off, not a bug).
+
+### Cleanup
+
+- Deleted 12 pre-V07 files (recoverable via git): `learning_model.py`,
+  `generate_synthetic*.py`, `phase1_check.py`, `phase2_recovery.py`,
+  `pgm_inspect.py`, `pooling_experiment.py`, `prior_inspect.py`,
+  `bin_search.py`, `evidence_scan.py`, `preview_synthetic.py`, `run.py`.
+  All were either pre-V07 with V07 successors, or referenced model
+  parameterizations the V07 lineage doesn't use. Pre-deletion grep
+  confirmed no current file imports any of them.
+- Old `_laplace_sds_for_pooled` helper removed from fit_eb_pool (dead
+  code after the σ-collapse fix made deconvolution unnecessary).
+
+### Headline numbers
+
+- Tests: 45 passing (was 24 before this session). Suite runs in ~90s.
+- All 5 cells in the NUTS bench are Laplace PD post-smooth-abs fix
+  (was 1/5 pre-fix). NUTS R-hat improved across the board (e.g. beta2
+  N=100: 1.053 → 1.019).
+- EB pool: 29-57% per-segment SD reduction on the three pooled halflives
+  for 6 hyperparams of cost (the old buggy 68-86% was inflated).
+- Pool means actually drift toward truth on synth: sf +84% of gap, ssp
+  +54%, alpha +79%.
+
+## 2026-05-16 (bonus session) — Empirical-Bayes pool on halflife_sf
+
 ## 2026-05-16 (bonus session) — Empirical-Bayes pool on halflife_sf
 
 The "smallest principled HYPER" step landed.

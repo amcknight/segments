@@ -59,10 +59,10 @@ from fit_jax import (
     sample_laplace,
 )
 
-# ----- Multi-segment empirical-Bayes pool (HYPER-lite) -----
+# ----- Multi-segment empirical-Bayes pool (HYPER-lite, all 3 halflives) -----
 from fit_eb_pool import (
-    Pool,                # NamedTuple(log_halflife_sf_mean, log_halflife_sf_sigma)
-    fit_eb_pool,         # iterate the EB loop, returns (pool, maps, history)
+    Pool,                # NamedTuple with 6 fields: log_halflife_{sf,ssp,alpha}_{mean,sigma}
+    fit_eb_pool,         # one-step sigma + iterated mean, returns (pool, maps, history)
     fit_independent,    # baseline: no pooling
 )
 

@@ -40,6 +40,71 @@ def test_jax_and_numpy_halflife_sigma_agree():
         assert np.isclose(np_val, jx_val)
 
 
+def test_autodiff_hessian_matches_fd_at_zero_amplitude():
+    """Regression: the |A| cusp at A=0 used to corrupt JAX autodiff
+    Hessians, making Laplace bands fail PD on well-spec haz1 fits.
+    Smooth-abs (sqrt(A^2+eps^2)-eps) fixes it. See pgm_tricks.md
+    "Smooth-once isn't smooth-twice".
+
+    Construct theta where A_ssp = 0 exactly (the worst case) and verify
+    autodiff Hessian agrees with central finite differences along every
+    coordinate axis. Failure here = a non-C^2 spot has crept into the
+    posterior somewhere.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    from generate_synthetic_learning_v07 import TRUTH_DEFAULTS, generate
+    import learning_model_v07_jax as lm_jx
+
+    data = generate(100, TRUTH_DEFAULTS, seed=0)
+    time_ms, is_died = lm_jx.data_to_arrays(data)
+
+    # theta with A_ssp = 0 (log_ssp_1 == log_ssp_inf)
+    t = TRUTH_DEFAULTS
+    theta = np.array([
+        np.log(t['bpt']), np.log(t['sf_inf']), np.log(t['ssp_inf']),
+        np.log(t['alpha_inf']), np.log(t['sf_1']),
+        np.log(t['ssp_inf']),                      # log_ssp_1 := log_ssp_inf
+        np.log(t['alpha_1']),
+        np.log(t['sf_halflife']), np.log(t['ssp_halflife']),
+        np.log(t['alpha_halflife']),
+    ])
+
+    def nlp(th):
+        return float(-lm_jx.log_posterior(jnp.asarray(th), time_ms, is_died))
+
+    H_ad = np.asarray(
+        jax.hessian(lambda th: -lm_jx.log_posterior(th, time_ms, is_died))(
+            jnp.asarray(theta)
+        )
+    )
+
+    nlp_0 = nlp(theta)
+    eps = 1e-3
+    # Diagonal FD only — full FD Hessian is O(N^2) calls; diagonal catches
+    # the bug because |A_ssp| sits along (log_ssp_inf, log_ssp_1) which are
+    # axis-aligned coordinates.
+    for i in range(len(theta)):
+        e = np.zeros_like(theta)
+        e[i] = 1.0
+        nlp_plus = nlp(theta + eps * e)
+        nlp_minus = nlp(theta - eps * e)
+        fd_diag = (nlp_plus + nlp_minus - 2 * nlp_0) / eps**2
+        ad_diag = H_ad[i, i]
+        # Tolerance: 5% relative or 0.5 absolute. Large abs tolerance for
+        # tiny FD values where rounding noise dominates.
+        rel = abs(ad_diag - fd_diag) / max(abs(fd_diag), 1.0)
+        abs_err = abs(ad_diag - fd_diag)
+        assert rel < 0.05 or abs_err < 0.5, (
+            f"autodiff vs FD Hessian disagreement at dim {i}: "
+            f"AD={ad_diag:+.3f}, FD={fd_diag:+.3f} "
+            f"(rel={rel:.3f}, abs={abs_err:.3f}). "
+            f"This usually means a non-C^2 function (abs, max, sqrt-near-0, "
+            f"sharp where) has been introduced into the model."
+        )
+
+
 def test_no_learning_posterior_collapses_halflife():
     """The big behavioral test: at A=0 with no-learning data, log_posterior on a
     halflife grid should be MUCH tighter than the broad-marginal prior would allow.

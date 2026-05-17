@@ -75,6 +75,79 @@ is the cleanest treatment of "A might be exactly zero," but the point
 mass breaks NM/L-BFGS and needs careful MCMC. Joint prior is the smooth
 alternative.
 
+## Smooth-once isn't smooth-twice — non-differentiable Hessian bombs
+
+**Symptom.** Laplace bands are wrong (or fail PD) on cases where the MAP
+fit looks fine. L-BFGS converges, the gradient is small, but the
+Hessian at MAP has a large *negative* eigenvalue. Finite-difference 2nd
+derivatives along the bad eigenvector are positive and large. Autodiff
+disagrees with finite differences.
+
+**Diagnosis.** The negative log-posterior contains a once-differentiable
+but not-twice-differentiable function near the MAP. Common culprits:
+
+- `|x|` (kink at 0; 2nd derivative formally a Dirac there)
+- `max(0, x)`, ReLU, hinge
+- `min(x_lower, x, x_upper)` (clamp)
+- `jnp.where(cond, ...)` with a sharp `cond` boundary
+- `jnp.sqrt(x)` near x=0
+- Any piecewise definition glued at a single point
+
+JAX (and most autodiff frameworks) produce *some* value for the second
+derivative through these — often 0 or a one-sided limit — and it's not
+what the cusp actually contributes (a finite spike or a diverging
+limit). Forward-mode autodiff gives the same wrong answer because the
+underlying function isn't C².
+
+This bites doubly when the MAP *lands on the cusp*. The optimizer is
+attracted there because the prior pulls A toward 0 and the likelihood
+provides no signal in the no-learning case. So the cusp isn't an
+"edge case you might hit" — it's the *most common case* in some regimes.
+
+**This project (real bug, found 2026-05-17 — see `memory/nuts-perf` for
+the bench that surfaced it):** `halflife_sigma(A) = σ_min + (σ_max − σ_min)
+· tanh(|A|)`. The `tanh(|A|)` is once-differentiable in A (tanh smooths
+the kink in the *value* of σ), but the *second* derivative of σ w.r.t.
+A is wrong at A=0. The MAP of well-spec haz1/N=100 data landed at
+A_ssp = 4.6e-9 (essentially exactly the cusp), JAX autodiff returned
+d²/dA² = -147 there, Laplace flagged the Hessian non-PD, and the
+"fallback to NUTS" code path looked like it was kicking in for a genuine
+ridge when actually it was a pure autodiff bug.
+
+**Fix (always available, always principled): the smooth-abs trick.**
+
+```python
+def smooth_abs(x, eps=1e-2):
+    return jnp.sqrt(x * x + eps * eps) - eps   # smooth_abs(0) = 0 exactly
+```
+
+`smooth_abs` is twice (in fact infinitely) differentiable, equals 0 at 0,
+and approaches `|x|` to within `eps` for `|x| >> eps`. Its second
+derivative at 0 is `1/eps` — large but finite, which is the correct
+representative for the cusp's contribution to local curvature. Then
+`tanh(smooth_abs(A))` is *twice* differentiable everywhere and autodiff
+Hessians work.
+
+Same trick handles other culprits:
+
+- `max(0, x)` → `0.5 · (x + smooth_abs(x))`  (smooth ReLU)
+- `min(a, x)` → `a − smooth_abs(a − x)`      (smooth clamp lower)
+- `sqrt(x)` near x=0 → `sqrt(x + eps²)`      (smooth root)
+- `jnp.where(c, f, g)` with sharp c → multiply by a sigmoid window
+
+**General lesson.** "Once-differentiable" is a low bar. Laplace, NUTS
+mass adaptation, and any inference that wants second-order information
+needs the model to be C² along every direction the sampler/optimizer can
+take. When designing priors and likelihoods, ask: does this function
+have a continuous *second* derivative everywhere on the support, not
+just a continuous first? If not, smooth it before you ship.
+
+**Testing trick.** For any new prior or likelihood term, compute the
+Hessian at MAP via both autodiff and central finite differences along
+the smallest-eigvec direction. If they disagree by more than a few
+percent, you have a non-C² spot. The diagnosis script in
+`tmp/` for the segment-model bug is a reusable template.
+
 ## Hierarchical models / partial pooling / shrinkage
 
 When you have many groups (segments, users, units), let each group's
@@ -138,6 +211,60 @@ N independent per-group blocks. Linear scaling. Production friendly.
 **Tradeoff:** point-estimated hypers don't propagate hyperparameter
 uncertainty into the per-group posteriors. For small N this matters; for
 large N it's negligible.
+
+### EB σ collapse — iterate the mean, fix the scale
+
+**Symptom.** Iterative EB (re-fit MAPs → re-estimate (μ_pop, σ_pop) from
+MAPs → loop) appears to converge, but σ_pop pegs at the floor regardless
+of true population spread. Per-group posterior bands look impressively
+tight ("X% SD reduction!"). Closer look: the algorithm is collapsing the
+prior, not learning the population.
+
+**Why it happens.** As σ_pop shrinks, each group's MAP is pulled tighter
+toward μ_pop. So `std(MAPs)` (the next iter's σ_pop estimate) shrinks
+mechanically. Feedback loop: σ_pop ↓ → MAPs cluster ↓ → std(MAPs) ↓ →
+σ_pop ↓. Floored at `sigma_floor` to avoid going to 0.
+
+**Why the natural method-of-moments fix doesn't save you.** The standard
+unbiased estimator
+`σ²_pop = max(0, var(MAPs) - mean(σ²_within))`
+returns 0 (negative variance, clipped) when within-segment Laplace SD is
+comparable to the cross-MAP spread — i.e., when per-segment data can't
+distinguish population spread from segment noise. This is *correct*
+behavior on weakly-identified populations, but combined with iteration it
+just collapses faster.
+
+**Fix: one-step scale, iterated location.**
+
+```python
+# Stage 1: estimate σ_pop ONCE from broad-prior MAPs.
+unpooled_maps = [fit(seg, default_prior) for seg in segments]
+sigma_pop = std(unpooled_maps[:, idx])      # raw — slightly overestimates
+                                            # because it includes within-noise
+
+# Stage 2: fix σ_pop, iterate μ_pop only.
+for it in range(max_iter):
+    maps = [fit(seg, pool=(mu_pop, sigma_pop)) for seg in segments]
+    mu_pop = mean(maps[:, idx])
+```
+
+σ_pop from broad-prior MAPs slightly overestimates the true σ_pop
+(includes within-noise), but the overestimate gives wider, more *honest*
+bands rather than overconfident ones. The μ_pop iteration is well-behaved
+because σ_pop is fixed.
+
+**This project (real bug, found+fixed 2026-05-17 — see
+`memory/eb-sigma-collapse`):** The original `fit_eb_pool` iterated both
+parameters; σ collapsed to floor=0.05 within 3 iters and the reported
+"68-86% SD reduction" was a partial artifact. After one-step σ + iterated
+μ: SD reduction is 29-57% (honest), and the pool mean correctly drifts
+toward truth instead of getting pinned near the prior median.
+
+**General lesson.** When the population is weakly identified relative to
+within-group noise (very common — it's the whole reason you're pooling),
+iterating both scale and location is unstable. Iterate the cheap thing
+(location), fix the expensive one (scale). Test with verbose output the
+first time you implement EB — silent collapse is the failure mode.
 
 ## Other gotchas
 

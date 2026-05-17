@@ -117,12 +117,20 @@ _PRIOR_HALFLIFE_MEAN = jnp.array([
 ])
 
 
+_SMOOTH_ABS_EPS = 1e-2
+
+
+def _smooth_abs(A, eps=_SMOOTH_ABS_EPS):
+    """sqrt(A^2 + eps^2) - eps. See learning_model_v07_jax._smooth_abs."""
+    return jnp.sqrt(A * A + eps * eps) - eps
+
+
 def halflife_sigma(A, sigma_max=HALFLIFE_SIGMA_MAX, sigma_min=HALFLIFE_SIGMA_MIN):
     """Joint-prior sigma on log(halflife) given amplitude A. JAX version.
 
     Same as learning_model_v07_jax.halflife_sigma.
     """
-    return sigma_min + (sigma_max - sigma_min) * jnp.tanh(jnp.abs(A))
+    return sigma_min + (sigma_max - sigma_min) * jnp.tanh(_smooth_abs(A))
 
 
 def learning_curve_at_n(theta, n):
@@ -287,7 +295,10 @@ def log_likelihood(theta, time_ms_arr, is_died_arr):
     return jnp.sum(per_attempt)
 
 
-def log_prior(theta, halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None):
+def log_prior(theta,
+              halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None,
+              halflife_ssp_pop_mean=None, halflife_ssp_pop_sigma=None,
+              halflife_alpha_pop_mean=None, halflife_alpha_pop_sigma=None):
     """Joint prior over 15 params.
 
     Shape-param priors are independent Normal in unconstrained space:
@@ -295,12 +306,15 @@ def log_prior(theta, halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None):
         log(kappa_k) ~ N(log 15, 1.0)
         eta_1 ~ N(0, 1.5)
 
-    halflife_sf_pop_{mean,sigma}: EB pool overrides for halflife_sf prior.
+    For each of {sf, ssp, alpha}, halflife_<x>_pop_{mean,sigma} are
+    optional EB pool overrides; None = use module defaults.
     """
-    hl_sf_mean = (PRIOR_LOG_HALFLIFE_SF_MEAN if halflife_sf_pop_mean is None
-                  else halflife_sf_pop_mean)
-    hl_sf_sigma_max = (HALFLIFE_SIGMA_MAX if halflife_sf_pop_sigma is None
-                       else halflife_sf_pop_sigma)
+    hl_sf_mean   = PRIOR_LOG_HALFLIFE_SF_MEAN    if halflife_sf_pop_mean    is None else halflife_sf_pop_mean
+    hl_sf_sigma  = HALFLIFE_SIGMA_MAX            if halflife_sf_pop_sigma   is None else halflife_sf_pop_sigma
+    hl_ssp_mean  = PRIOR_LOG_HALFLIFE_SSP_MEAN   if halflife_ssp_pop_mean   is None else halflife_ssp_pop_mean
+    hl_ssp_sigma = HALFLIFE_SIGMA_MAX            if halflife_ssp_pop_sigma  is None else halflife_ssp_pop_sigma
+    hl_a_mean    = PRIOR_LOG_HALFLIFE_ALPHA_MEAN if halflife_alpha_pop_mean is None else halflife_alpha_pop_mean
+    hl_a_sigma   = HALFLIFE_SIGMA_MAX            if halflife_alpha_pop_sigma is None else halflife_alpha_pop_sigma
 
     asymp = theta[:N_STATIC_ASYMP]
     ones = jnp.array([theta[IDX_LOG_SF_1], theta[IDX_LOG_SSP_1], theta[IDX_LOG_ALPHA_1]])
@@ -311,12 +325,9 @@ def log_prior(theta, halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None):
     lp_asymp = jnp.sum(jnorm.logpdf(asymp, _PRIOR_ASYMP_MEAN, _PRIOR_ASYMP_SD))
     lp_one   = jnp.sum(jnorm.logpdf(ones,  _PRIOR_ONE_MEAN,   _PRIOR_ONE_SD))
 
-    lp_hl_sf = jnorm.logpdf(theta[IDX_LOG_HALFLIFE_SF],
-                            hl_sf_mean, halflife_sigma(A[0], sigma_max=hl_sf_sigma_max))
-    lp_hl_ssp = jnorm.logpdf(theta[IDX_LOG_HALFLIFE_SSP],
-                             PRIOR_LOG_HALFLIFE_SSP_MEAN, halflife_sigma(A[1]))
-    lp_hl_a = jnorm.logpdf(theta[IDX_LOG_HALFLIFE_ALPHA],
-                           PRIOR_LOG_HALFLIFE_ALPHA_MEAN, halflife_sigma(A[2]))
+    lp_hl_sf  = jnorm.logpdf(theta[IDX_LOG_HALFLIFE_SF],    hl_sf_mean,  halflife_sigma(A[0], sigma_max=hl_sf_sigma))
+    lp_hl_ssp = jnorm.logpdf(theta[IDX_LOG_HALFLIFE_SSP],   hl_ssp_mean, halflife_sigma(A[1], sigma_max=hl_ssp_sigma))
+    lp_hl_a   = jnorm.logpdf(theta[IDX_LOG_HALFLIFE_ALPHA], hl_a_mean,   halflife_sigma(A[2], sigma_max=hl_a_sigma))
 
     # Beta-shape priors (5 latents).
     lp_mu1   = jnorm.logpdf(theta[IDX_LOGIT_MU_1],  PRIOR_LOGIT_MU_MEAN, PRIOR_LOGIT_MU_SD)
@@ -330,9 +341,16 @@ def log_prior(theta, halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None):
 
 
 def log_posterior(theta, time_ms_arr, is_died_arr,
-                  halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None):
-    return (log_prior(theta, halflife_sf_pop_mean=halflife_sf_pop_mean,
-                      halflife_sf_pop_sigma=halflife_sf_pop_sigma)
+                  halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None,
+                  halflife_ssp_pop_mean=None, halflife_ssp_pop_sigma=None,
+                  halflife_alpha_pop_mean=None, halflife_alpha_pop_sigma=None):
+    return (log_prior(theta,
+                      halflife_sf_pop_mean=halflife_sf_pop_mean,
+                      halflife_sf_pop_sigma=halflife_sf_pop_sigma,
+                      halflife_ssp_pop_mean=halflife_ssp_pop_mean,
+                      halflife_ssp_pop_sigma=halflife_ssp_pop_sigma,
+                      halflife_alpha_pop_mean=halflife_alpha_pop_mean,
+                      halflife_alpha_pop_sigma=halflife_alpha_pop_sigma)
             + log_likelihood(theta, time_ms_arr, is_died_arr))
 
 
@@ -409,9 +427,16 @@ def log_likelihood_padded(theta, time_ms_padded, is_died_padded, valid_n):
 
 
 def log_posterior_padded(theta, time_ms_padded, is_died_padded, valid_n,
-                         halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None):
-    return (log_prior(theta, halflife_sf_pop_mean=halflife_sf_pop_mean,
-                      halflife_sf_pop_sigma=halflife_sf_pop_sigma)
+                         halflife_sf_pop_mean=None, halflife_sf_pop_sigma=None,
+                         halflife_ssp_pop_mean=None, halflife_ssp_pop_sigma=None,
+                         halflife_alpha_pop_mean=None, halflife_alpha_pop_sigma=None):
+    return (log_prior(theta,
+                      halflife_sf_pop_mean=halflife_sf_pop_mean,
+                      halflife_sf_pop_sigma=halflife_sf_pop_sigma,
+                      halflife_ssp_pop_mean=halflife_ssp_pop_mean,
+                      halflife_ssp_pop_sigma=halflife_ssp_pop_sigma,
+                      halflife_alpha_pop_mean=halflife_alpha_pop_mean,
+                      halflife_alpha_pop_sigma=halflife_alpha_pop_sigma)
             + log_likelihood_padded(theta, time_ms_padded, is_died_padded, valid_n))
 
 

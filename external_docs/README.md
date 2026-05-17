@@ -17,7 +17,11 @@ lives in the parent directory; this is the design surface.
    what's pooled across segments and what isn't. v1 scope is the
    three halflives via empirical Bayes. Game-level + difficulty
    explicitly deferred.
-4. **[pgm_tricks.md](pgm_tricks.md)** — glossary of PGM patterns
+4. **[nonstationary_shape.md](nonstationary_shape.md)** — *proposal,
+   not v1*: how to let the beta-mixture hazard shape drift across
+   attempts (moving peaks). State-space + Student-t RW; addresses the
+   `moving_peaks` open concern.
+5. **[pgm_tricks.md](pgm_tricks.md)** — glossary of PGM patterns
    (identifiability, ridges, joint priors, partial pooling, Neal
    funnel, empirical Bayes). Reference when reading the model docs.
 
@@ -29,6 +33,7 @@ external_docs/
 ├── segment_model.md                   base model (fixed skill)
 ├── learning_curves.md                 V07 extension (what's implemented)
 ├── segment_model_hyperpriors.md       hierarchical pooling (v1 = halflives only)
+├── nonstationary_shape.md             PROPOSAL: drifting beta-mixture peaks
 ├── pgm_tricks.md                      glossary
 ├── reports/                           dated snapshots from prior sessions
 └── reference/                         external (SpinLab schema)
