@@ -1,5 +1,11 @@
 """End-of-data comparison across beta-mixture K values (and vs piecewise).
 
+**v2-scope — parked.** Beta-K mixtures are not in the v1 API surface (see
+V1_ESSENCE.md). This script is preserved as the starting point for any v2
+beta2 work inside SpinLab. v1 porters can ignore it. Default fixtures
+`test_data.tsv` (real data N=22) and `test_synth.tsv` (K=3-truth synth)
+at the repo root exist solely to support this script.
+
 Fits each model once on the full dataset, computes Laplace log-evidence with
 the log(K!) correction for mixtures, then renders a figure that shows:
 

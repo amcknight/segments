@@ -1,5 +1,51 @@
 # Changelog
 
+## 2026-05-18 (cont.) — handoff polish
+
+- Three new validation cases — `no_learning` (flat curves; exercises
+  the joint `(halflife, A)` prior collapse), `all_died` (no survived
+  attempts; exercises `bpt_upper = +inf` fallback and fires honest PPC
+  tension), `all_survived` (no deaths; exercises the all-survives
+  likelihood path). 9 total harness tests now.
+- `fit_core.prewarm` now also prewarms the Hessian path per bucket.
+  Drops streaming `refit_segment` p99 from ~600 ms to ~45 ms
+  (eliminates bucket-boundary recompile spikes).
+- Closed-form `M_clear` for haz1 in `api._build_derived` — replaces a
+  Simpson-quadrature Python loop (200 samples × 200-point grid) that
+  was burning 75% of the live-streaming budget. Closed form matches
+  the numpy reference to 1e-12.
+- Contract budget claim updated from "p50 8 ms / p99 35 ms" (which was
+  `find_map` alone) to "p50 ~15 ms / p99 ~45 ms" (the full
+  `refit_segment` pipeline including Laplace + samples + derived +
+  bands packaging). Measured with `tmp/bench_refit_segment.py`.
+- Root-level cleanup: dropped unused `test_data.csv`; added v2-scope
+  banner to `beta_compare.py` and surfaced what `test_data.tsv` /
+  `test_synth.tsv` are for in the README.
+
+## 2026-05-18 — v1 wire-format contract + serializer + validation harness
+
+Handoff plumbing for SpinLab:
+
+- **`external_docs/api_contract.md`** — JSON wire format spec. Top-level
+  envelope (`schema`/`kind`/`status`/`result`/`caveats`), three result
+  blocks for segment fits (`map`, `bands`, `derived`, `ppc`) and a pool
+  block for EB fits. Caveat keys are stable; tolerances pinned.
+- **`api.py`** — thin serializer exposing `fit_segment` / `refit_segment`
+  / `fit_pool` that compose existing modules and emit the contract
+  shape. Re-exported from `segments_v07`.
+- **`validation/`** — frozen TSV inputs + expected JSON payloads for
+  three cases (n40 happy path, n15 low-N, 3-segment pool).
+  `validation/regenerate.py` refreshes the fixtures when contract or
+  numerics intentionally shift.
+- **`tests/test_api_shape.py`** (11 tests) locks the contract shape;
+  **`tests/test_validation_harness.py`** (3 tests) pins numerics at
+  ~5 sig figs (map/derived) / ~4 sig figs (bands/ppc).
+- Cross-process numerics are reproducible when JAX JIT compilation
+  order is held constant — `regenerate.py` mirrors `tests/conftest.py`'s
+  import order to keep this stable.
+
+This completes the v1 handoff path per `memory/plan_forward_sequence.md`.
+
 ## 2026-05-17 (late) — v1 scope reframe, parking beta2 and shape work
 
 Mid-session scope reframe in conversation with the model consumer. Outcome:

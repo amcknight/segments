@@ -77,8 +77,22 @@ picks them up.
 
 ## Public API surface
 
+For the JSON wire format that the SpinLab boundary expects, see
+[`external_docs/api_contract.md`](external_docs/api_contract.md) and
+the live serializer in `api.py` (re-exported as
+`sv.{fit_segment, refit_segment, fit_pool}`). The Python surface below
+is the lower-level math API that the serializer composes; callers who
+just want the JSON payload should use the three contract helpers.
+
 ```python
 import segments_v07 as sv
+
+# v1 JSON-payload surface (the SpinLab handoff)
+result = sv.fit_segment(attempts, segment_id="w1-2-castle")
+result = sv.refit_segment(attempts, prev_result=result)
+result = sv.fit_pool([{"segment_id": ..., "attempts": [...]}, ...])
+
+# Lower-level math API (composed by the helpers above)
 
 # 1. Single-segment fit (haz1, the v1 model)
 t_ms, is_died = sv.data_to_arrays(rows)   # rows: list of ('survived'|'died', ms)
@@ -270,6 +284,9 @@ Read these only when something above sends you there.
   smooth-once-not-smooth-twice). Read when debugging fit pathologies.
 - [`external_docs/nonstationary_shape.md`](external_docs/nonstationary_shape.md)
   — v2-scope moving-peaks proposal. Read only when starting v2 work.
+- [`external_docs/api_contract.md`](external_docs/api_contract.md) — v1
+  JSON wire format between this repo and SpinLab. Read when wiring the
+  serializer or implementing the porter side.
 
 The older session reports in `external_docs/reports/` are historical record
 of how we got here; they're not part of the v1 contract.

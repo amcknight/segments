@@ -69,6 +69,14 @@ from fit_eb_pool import (
 # ----- Numpy reference (kept for cross-validation and offline tools) -----
 import learning_model_v07 as numpy_reference
 
+# ----- v1 JSON-payload serializer (the SpinLab handoff surface) -----
+from api import (
+    SCHEMA,
+    fit_segment,
+    refit_segment,
+    fit_pool,
+)
+
 __all__ = [
     # constants
     'N_PARAMS',
@@ -87,6 +95,8 @@ __all__ = [
     'laplace_posterior', 'sample_laplace',
     # EB pool
     'Pool', 'fit_eb_pool', 'fit_independent',
+    # v1 JSON-payload serializer
+    'SCHEMA', 'fit_segment', 'refit_segment', 'fit_pool',
     # reference (numpy: sample_prior, log_prior, log_likelihood etc.)
     'numpy_reference',
 ]
