@@ -30,6 +30,7 @@ lives in the parent directory; this is the design surface.
 ```
 external_docs/
 ├── README.md                          (this file)
+├── api_contract.md                    v1 wire format for SpinLab (segment_fit / pool_fit JSON)
 ├── segment_model.md                   base model (fixed skill)
 ├── learning_curves.md                 V07 extension (what's implemented)
 ├── segment_model_hyperpriors.md       hierarchical pooling (v1 = halflives only)
@@ -38,6 +39,10 @@ external_docs/
 ├── reports/                           dated snapshots from prior sessions
 └── reference/                         external (SpinLab schema)
 ```
+
+For the integration contract specifically, read
+[`../V1_ESSENCE.md`](../V1_ESSENCE.md) (Python API surface) and
+[`api_contract.md`](api_contract.md) (JSON wire format) together.
 
 ## Reports vs main docs
 

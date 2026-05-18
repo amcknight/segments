@@ -96,9 +96,13 @@ def bpt_upper(time_ms, is_died):
 
 
 def prewarm(lm, buckets, _cache):
-    """JIT-compile the nlp+grad path for each bucket size against `lm`.
-    `_cache` is a module-level set of already-warmed sizes (kept per-model
-    in the shim modules)."""
+    """JIT-compile the nlp + grad + hessian paths for each bucket size
+    against `lm`. `_cache` is a module-level set of already-warmed sizes
+    (kept per-model in the shim modules).
+
+    The Hessian is prewarmed too because `laplace_posterior` needs it, and
+    the v1 serializer pipeline (find_map → laplace_posterior → samples)
+    would otherwise spike at every bucket crossing during streaming."""
     fns = _fit_fns_for(lm)
     theta_dummy = jnp.asarray(lm.initial_theta())
     pool = tuple(jnp.asarray(v) for v in resolve_pool(lm))
@@ -109,6 +113,7 @@ def prewarm(lm, buckets, _cache):
         d_dummy = jnp.zeros(n_max, dtype=bool)
         _ = float(fns.nlp(theta_dummy, t_dummy, d_dummy, 1, *pool))
         _ = fns.value_and_grad(theta_dummy, t_dummy, d_dummy, 1, *pool)
+        _ = fns.hessian(theta_dummy, t_dummy, d_dummy, 1, *pool)
         _cache.add(n_max)
 
 

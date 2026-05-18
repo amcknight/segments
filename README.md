@@ -16,7 +16,7 @@ for handoff to a production Python service feeding a TypeScript live viz.
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt
 
-# Sanity-check the install (66 tests, ~95s; the NUTS suite is the slow ~70s of that)
+# Sanity-check the install (80 tests, ~95s; the NUTS suite is the slow ~70s of that)
 .venv/Scripts/python -m pytest tests/
 
 # Render the inspector (numpy reference; opens HTML in tmp/)
@@ -50,7 +50,7 @@ python -m venv .venv
 | `generate_synthetic_learning_v07.py` | Synth generator. `generate(...)` for single-segment, `generate_multi_segment*()` for population-varying truth. Supports `hazard_truth='haz1'` or `'beta2'`. |
 | `phase2_recovery_v07.py` | Recovery experiment runner (numpy fit). The "does V07 hit pass criteria" gate. |
 | `pgm_inspect_v07.py` | Interactive PGM inspector + knob console; renders HTML + mermaid sidecar. |
-| `tests/` | pytest suite: 45 tests covering curve identities, JAX≡numpy, joint prior + autodiff Hessian regression, fit pipeline, PPC, NUTS, EB pool. |
+| `tests/` | pytest suite: 80 tests covering curve identities, JAX≡numpy, joint prior + autodiff Hessian regression, fit pipeline, PPC, NUTS, EB pool, v1 API shape, and the validation harness. |
 
 ### Shared infrastructure (numpy-era, still used)
 
@@ -60,7 +60,7 @@ python -m venv .venv
 | `hazard.py` | Hazard model interface and impls (haz1 piecewise, beta mixture). Used by `beta_compare.py` and the inspector. |
 | `inference.py` | numpy MAP/Laplace helpers. Used by inspector and phase2 recovery. |
 | `binning.py` | Bin-edge pickers (uniform, quantile, kde_valleys, k-means). Used by `beta_compare.py`. |
-| `beta_compare.py` | Offline tool: beta-mixture K sweep on a single dataset with Bayes-evidence model averaging. |
+| `beta_compare.py` | Offline tool: beta-mixture K sweep on a single dataset with Bayes-evidence model averaging. **v2-scope — parked.** Default fixtures `test_data.tsv` / `test_synth.tsv` at the repo root exist only to support this script. |
 | `config.py` | Cross-cutting constants (RESPAWN_MS, QUAD_POINTS, etc.). |
 
 ### Data layer
@@ -69,6 +69,15 @@ python -m venv .venv
 |---|---|
 | `data/schema.sql` | Minimal sqlite table (`attempts`). |
 | `data/db.py` | `init`, `export` CLI. Insert via your own pipeline. |
+
+### v1 handoff surface (the porter walks in here)
+
+| File | What |
+|---|---|
+| `V1_ESSENCE.md` | Integration contract: what ships, what's parked, what bands to trust. **Read first.** |
+| `external_docs/api_contract.md` | JSON wire-format spec for the SpinLab boundary. |
+| `api.py` | Live serializer: `fit_segment` / `refit_segment` / `fit_pool` that emit the contract payload. |
+| `validation/` | Frozen TSV inputs + expected JSON payloads + `regenerate.py`. Porters validate their reimplementation against these. |
 
 ### Docs
 
@@ -143,7 +152,8 @@ On CPU JAX (after `prewarm_buckets()`), single-segment at N=500:
 | Op | haz1 | beta2 |
 |---|---|---|
 | Cold MAP fit | ~10–300 ms | ~100–500 ms |
-| Streaming refit (one new attempt, warm-started) | **p50 8ms, p99 35ms** | ~30 ms p50 |
+| Streaming refit (`fit_jax.find_map` alone, warm-started) | p50 8ms, p99 35ms | ~30 ms p50 |
+| Streaming refit (`api.refit_segment` full payload, default live cadence) | **p50 ~15 ms, p99 ~45 ms** | n/a |
 | Laplace posterior (Hessian + invert + sample 2000) | ~600 ms | ~2 s |
 | NUTS posterior (500 warmup + 1000 samples × 2 chains, MAP-init) | ~160 s | ~450 s |
 
