@@ -199,3 +199,98 @@ def test_haz1_on_beta2_truth_catches_misspec(beta2_truth_data):
         f"min p_two_sided over shape stats = {min_p:.3f}. Detail: "
         + ", ".join(f"{s}={result[s]['p_two_sided']:.3f}" for s in shape_stats)
     )
+
+
+# ---------------------------------------------------------------------------
+# Tertile mid_third stats — within-run shape drift
+# ---------------------------------------------------------------------------
+
+
+def test_tertile_stats_register_v2_only():
+    """The tertile stats live in V2_WITHIN_RUN_STATS, NOT DEFAULT_STATS —
+    v1 ships static-shape so firing within-run drift detectors by default
+    would surface noise the v1 model can't act on. v2 (moving-peaks) opts in."""
+    for name in ('died_s_mid_third_early', 'died_s_mid_third_late',
+                 'died_s_mid_third_delta'):
+        assert name in ppc.V2_WITHIN_RUN_STATS, f"{name} should be v2-only"
+        assert name not in ppc.DEFAULT_STATS, (
+            f"{name} leaked into v1 DEFAULT_STATS"
+        )
+
+
+def test_tertile_delta_static_truth_is_small(haz1_truth_data):
+    """Static-shape truth should produce a near-zero late-minus-early delta
+    (modulo finite-sample noise at N=300)."""
+    time_ms = np.array([t for _, t in haz1_truth_data], dtype=float)
+    is_died = np.array([o == 'died' for o, _ in haz1_truth_data], dtype=bool)
+    delta = ppc.stat_died_s_mid_third_delta(time_ms, is_died)
+    assert abs(delta) < 0.25, (
+        f"static truth should not show large within-run drift; got delta={delta:.3f}"
+    )
+
+
+def test_tertile_delta_drift_truth_is_nonzero():
+    """Drift truth that moves mass ACROSS the [1/3, 2/3] boundary of the
+    normalized-tau distribution must produce a clearly non-zero delta.
+
+    Stat anatomy: `_middle_third_one` computes tau/q99(tau) per-tertile,
+    then asks "what fraction is in [1/3, 2/3]?". The q99 normalization
+    means a peak at s=0.5 only registers in mid-third if there's a
+    higher-s peak anchoring q99 above ~1.5 * 0.5 = 0.75. So this test
+    uses 3 mu's with a constant 10% weight at mu=0.95 as the anchor; the
+    movement is between mu=0.50 (early-dominant, registers in mid-third)
+    and mu=0.05 (late-dominant, registers below 1/3).
+
+    The stat has KNOWN BLIND SPOTS — drift that stays outside mid-third
+    in both phases, or that has no high-s anchor, produces ~0 delta even
+    for substantial within-run shape change. The sensitivity-matrix task
+    (#7) is where we map them.
+    """
+    from generate_synthetic_learning_v07 import strat_swap_shape
+    truth = dict(TRUTH_DEFAULTS)
+    truth['alpha_inf'] = 0.7
+    truth['alpha_1'] = 1.5
+    drift = strat_swap_shape(
+        mu=[0.05, 0.50, 0.95], kappa=[40.0, 30.0, 40.0],
+        w_before=[0.05, 0.85, 0.10],
+        w_after=[0.85, 0.05, 0.10],
+        n_swap=250, ramp_width=5,
+    )
+    rows = generate(500, truth, seed=7, hazard_truth='beta2', shape_at=drift)
+    time_ms = np.array([t for _, t in rows], dtype=float)
+    is_died = np.array([o == 'died' for o, _ in rows], dtype=bool)
+
+    mt_early = ppc.stat_died_s_mid_third_early(time_ms, is_died)
+    mt_late  = ppc.stat_died_s_mid_third_late(time_ms, is_died)
+    delta    = ppc.stat_died_s_mid_third_delta(time_ms, is_died)
+    assert np.isclose(delta, mt_late - mt_early)
+    assert mt_early > 0.15, (
+        f"early tertile (mass at s=0.5, anchored by s=0.95 peak) "
+        f"should hit mid-third; got mt_early={mt_early:.3f}"
+    )
+    assert mt_late < mt_early - 0.10, (
+        f"late should drop mid-third mass relative to early; "
+        f"got mt_early={mt_early:.3f}, mt_late={mt_late:.3f}"
+    )
+
+
+def test_tertile_stats_batched_shape(truth_theta):
+    """Batched (S, N) input should produce length-S output for each tertile stat."""
+    S = 5
+    samples = np.tile(truth_theta, (S, 1))
+    sim_t, sim_d = ppc.posterior_predictive(samples, n_attempts=300,
+                                             model='haz1', seed=0)
+    for name in ['died_s_mid_third_early', 'died_s_mid_third_late',
+                 'died_s_mid_third_delta']:
+        result = ppc.V2_WITHIN_RUN_STATS[name](sim_t, sim_d)
+        assert result.shape == (S,), f"{name}: got shape {result.shape}"
+
+
+def test_tertile_short_data_returns_zero():
+    """N < 9 should short-circuit to 0 (not enough deaths per tertile to
+    meaningfully estimate mid_third)."""
+    time_ms = np.array([5000.0, 6000.0, 7000.0], dtype=float)
+    is_died = np.array([True, True, False], dtype=bool)
+    assert ppc.stat_died_s_mid_third_early(time_ms, is_died) == 0.0
+    assert ppc.stat_died_s_mid_third_late(time_ms, is_died) == 0.0
+    assert ppc.stat_died_s_mid_third_delta(time_ms, is_died) == 0.0

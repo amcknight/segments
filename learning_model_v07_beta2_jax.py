@@ -1,5 +1,8 @@
 """V07 + Beta-K=2 mixture hazard, JAX implementation.
 
+V2-SCOPE — PARKED. v1 ships haz1 only; this module stays in the repo for
+v2 iteration inside SpinLab. Do not extend in v1. See /V1_ESSENCE.md.
+
 Extension of learning_model_v07_jax (haz1, K=1 constant hazard) to a K=2 beta
 mixture hazard. 15 params total: 10 from V07 base + 5 static beta-shape.
 

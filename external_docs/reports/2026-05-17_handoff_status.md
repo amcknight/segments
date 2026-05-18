@@ -1,5 +1,12 @@
 # Pre-handoff status — 2026-05-17
 
+> **SUPERSEDED 2026-05-17 (later same day) by [`/V1_ESSENCE.md`](../../V1_ESSENCE.md).**
+> The reframe parked beta2 + moving-peaks + route-change handling for v2
+> iteration inside SpinLab, leaving v1 as haz1 with monotone learning curves
+> and the EB pool. The priority tables below predate that reframe — read
+> `/V1_ESSENCE.md` for the authoritative v1 scope. This doc is kept as
+> historical record of the in-session decision trail.
+
 A regroup doc. Captures where the model lives now, what's locked in, what
 still needs answering before SpinLab can consume the fits, and what we
 can productively do in parallel while real data is being captured.
@@ -56,6 +63,23 @@ stay authoritative for the *model*. This doc is authoritative for the
 | Hyperprior expansion: which params get pooled beyond `halflife_sf`? | us, post-data |
 | Live-UI stat list — what numbers does SpinLab actually show? | user + SpinLab |
 | API contract between `segments` and SpinLab | us + SpinLab |
+
+### Known limitations
+
+Empirically-measured caveats that affect API design and band reporting
+are collected in [`../known_limitations.md`](../known_limitations.md).
+Headline items (all measured this session, 2026-05-17):
+
+- log_halflife_ssp 90% intervals under-cover (broad 57%, pool 29%).
+  Bands too narrow; report MAP only or widen.
+- ssp is the weakest-identified learning latent — wider per-segment SDs
+  are honest, not defective.
+- beta2 Laplace PD fails on ~20% of no-shape data. haz1 default, beta2
+  opt-in with NUTS fallback.
+- PPC catches abrupt shape change reliably; mostly blind to slow weight
+  drift. Don't promise PPC monitors moving-peaks.
+- `find_map` can converge to `-inf` posterior on edge-case segments;
+  callers must check `info['converged']` (now stricter post-2026-05-17).
 
 ## What needs to happen before SpinLab ports
 

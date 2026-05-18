@@ -1,6 +1,9 @@
 # Non-stationary shape (proposal)
 
-**Status:** design proposal, 2026-05-17. Not in v1 scope. Companion to
+**Status:** V2-SCOPE — PARKED. Design proposal, 2026-05-17, scope-reframed
+post-handoff-discussion. v1 ships static shape under haz1 only; this is
+where the moving-peaks extension lives for v2 iteration inside SpinLab.
+See `/V1_ESSENCE.md` for the scope split. Companion to
 [segment_model.md](segment_model.md) and [learning_curves.md](learning_curves.md);
 addresses the open concern logged as `moving_peaks` in session memory.
 

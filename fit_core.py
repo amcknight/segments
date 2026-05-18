@@ -153,10 +153,22 @@ def find_map(lm, time_ms, is_died, theta_init, *, pool=None,
         bounds=bounds,
         options={'maxiter': maxiter, 'ftol': 1e-9, 'gtol': 1e-6},
     )
+    # Detect the soft-penalty plateau: the JIT'd _nlp returns _NLL_PENALTY
+    # when raw log_posterior is -inf. If the optimizer settled there,
+    # scipy.success can be True even though the actual posterior is -inf
+    # at the returned theta — and downstream NUTS init will fail. Reflect
+    # that in `converged`.
+    nll = float(result.fun)
+    raw_lp_finite = nll < _NLL_PENALTY - 1.0
     info = {
         'iter': int(result.nit),
-        'nll': float(result.fun),
-        'converged': bool(result.success),
+        'nll': nll,
+        'raw_lp_finite': raw_lp_finite,
+        # converged means BOTH scipy succeeded AND raw lp is finite. Soft-
+        # penalty plateaus produce scipy.success=True with raw_lp=-inf;
+        # rejecting those keeps the contract honest for downstream NUTS.
+        'converged': bool(result.success) and raw_lp_finite,
+        'scipy_success': bool(result.success),
         'bucket_n': n_max,
         'pool_sf_mean':    pool[0], 'pool_sf_sigma':    pool[1],
         'pool_ssp_mean':   pool[2], 'pool_ssp_sigma':   pool[3],

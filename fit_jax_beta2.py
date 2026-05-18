@@ -1,5 +1,7 @@
 """beta2 fit shim. Parallel to fit_jax.py but binds learning_model_v07_beta2_jax.
 
+V2-SCOPE — PARKED. v1 ships haz1 only. See /V1_ESSENCE.md.
+
 Same machinery via fit_core.py; only the warm_init differs (15-param theta
 with broken shape-param symmetry).
 """

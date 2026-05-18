@@ -296,11 +296,106 @@ def stat_died_s_middle_third(time_ms, is_died):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Within-run tertile stats — for catching non-stationary hazard shape.
+#
+# `stat_died_s_middle_third` aggregates over the whole run. If the hazard
+# shape drifts within a single run (one of the three phenomena in
+# external_docs/nonstationary_shape.md), whole-run mid_third averages the
+# drift away — observed mid_third matches model mid_third on average even
+# though neither captures what's happening per-tertile.
+#
+# These stats bin deaths by attempt position (early/late thirds) and
+# return either the per-bin mid_third or its late-minus-early delta. The
+# delta is the "shape-drift detector" — ~0 for static truth, non-zero for
+# drift truth.
+#
+# Why tertiles and not halves: drift is often centered (phenomenon 2's
+# swap typically lands mid-run), so half-vs-half blurs the transition.
+# Comparing first-third to last-third gives a cleaner signal at the cost
+# of dropping the middle third's data from the delta.
+# ---------------------------------------------------------------------------
+
+
+def _tertile_slices(n_attempts):
+    """Index ranges for early third and late third. The middle third is
+    deliberately excluded from the delta to maximize separation."""
+    third = n_attempts // 3
+    early_hi = third
+    late_lo = n_attempts - third
+    return early_hi, late_lo
+
+
+def _middle_third_tertile_one(tau, died_mask, kind):
+    """One-dataset implementation. kind in {'early','late','delta'}."""
+    N = len(tau)
+    if N < 9:
+        return 0.0
+    early_hi, late_lo = _tertile_slices(N)
+    early = tau[:early_hi][died_mask[:early_hi]]
+    late  = tau[late_lo:][died_mask[late_lo:]]
+    mt_early = _middle_third_one(early)
+    mt_late  = _middle_third_one(late)
+    if kind == 'early':
+        return mt_early
+    if kind == 'late':
+        return mt_late
+    if kind == 'delta':
+        return mt_late - mt_early
+    raise ValueError(kind)
+
+
+def _stat_mid_third_tertile(time_ms, is_died, kind):
+    time_ms = np.asarray(time_ms, dtype=np.float64)
+    is_died = np.asarray(is_died, dtype=bool)
+    tau = time_ms - config.RESPAWN_MS
+    if time_ms.ndim == 1:
+        return _middle_third_tertile_one(tau, is_died, kind)
+    out = np.zeros(time_ms.shape[0])
+    for s in range(time_ms.shape[0]):
+        out[s] = _middle_third_tertile_one(tau[s], is_died[s], kind)
+    return out
+
+
+def stat_died_s_mid_third_early(time_ms, is_died):
+    """Mid-third mass computed on deaths in the first third of attempts."""
+    return _stat_mid_third_tertile(time_ms, is_died, 'early')
+
+
+def stat_died_s_mid_third_late(time_ms, is_died):
+    """Mid-third mass computed on deaths in the last third of attempts."""
+    return _stat_mid_third_tertile(time_ms, is_died, 'late')
+
+
+def stat_died_s_mid_third_delta(time_ms, is_died):
+    """Late-third mid_third mass minus early-third mid_third mass.
+
+    Detector for within-run hazard-shape drift (the three phenomena in
+    nonstationary_shape.md). For static-shape truth, ~0 in expectation;
+    for drift truth, non-zero with sign depending on which way the peak
+    moved.
+    """
+    return _stat_mid_third_tertile(time_ms, is_died, 'delta')
+
+
 DEFAULT_STATS = {
     'died_rate':         stat_died_rate,
     'died_tau_skew':     stat_died_tau_skew,
     'died_tau_kurt':     stat_died_tau_kurt,
     'died_s_mid_third':  stat_died_s_middle_third,
+}
+
+
+# v2-scope stats: detectors for within-run hazard-shape drift. Not in
+# DEFAULT_STATS — v1 ships with the static-shape assumption, so firing
+# these by default would surface noise the v1 model can't act on. They
+# stay defined here so the v2 follow-on (moving-peaks per
+# external_docs/nonstationary_shape.md) can opt in via stats=V2_WITHIN_RUN_STATS
+# or by extending DEFAULT_STATS.
+V2_WITHIN_RUN_STATS = {
+    'died_s_mid_third_early':    stat_died_s_mid_third_early,
+    'died_s_mid_third_late':     stat_died_s_mid_third_late,
+    'died_s_mid_third_delta':    stat_died_s_mid_third_delta,
 }
 
 

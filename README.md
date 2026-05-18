@@ -5,8 +5,10 @@ attempts (`survived` / `died`, times in ms), infer the underlying skill
 parameters and how they evolve as the player learns the segment. Designed
 for handoff to a production Python service feeding a TypeScript live viz.
 
-This README covers the file map, how to run things, and where the
-formal specs live.
+> **If you're porting v1 into SpinLab, read [`V1_ESSENCE.md`](V1_ESSENCE.md)
+> first.** That doc is the integration contract: what ships, what's parked,
+> what bands to trust, what to suppress. This README is the in-repo
+> developer view — file map, perf, dev workflow.
 
 ## Quick start
 
@@ -14,7 +16,7 @@ formal specs live.
 python -m venv .venv
 .venv/Scripts/python -m pip install -r requirements.txt
 
-# Sanity-check the install (45 tests, ~90s; the NUTS suite is the slow ~70s of that)
+# Sanity-check the install (66 tests, ~95s; the NUTS suite is the slow ~70s of that)
 .venv/Scripts/python -m pytest tests/
 
 # Render the inspector (numpy reference; opens HTML in tmp/)
@@ -37,11 +39,11 @@ python -m venv .venv
 |---|---|
 | `segments_v07.py` | **Public API.** `import segments_v07 as sv` and use. |
 | `learning_model_v07_jax.py` | **JAX impl of haz1 (10 latents).** Differentiable, JIT-compilable. |
-| `learning_model_v07_beta2_jax.py` | **JAX impl of beta2 (15 latents).** K=2 beta-mixture hazard. |
+| `learning_model_v07_beta2_jax.py` | **JAX impl of beta2 (15 latents).** K=2 beta-mixture hazard. **v2-scope — parked**; not in v1 API. |
 | `learning_model_v07.py` | **Numpy reference impl.** Slower; used for cross-validation and offline tools. Tests pin JAX ≡ numpy to ~1e-5. |
 | `fit_core.py` | **Generic fit machinery** parametrized over the model module: JIT'd value/grad/Hessian, MAP, Laplace. Adding a new hazard is a thin shim against this. |
 | `fit_jax.py` | haz1 fit shim: `warm_init_from_data` + thin wrappers binding `learning_model_v07_jax` into `fit_core`. |
-| `fit_jax_beta2.py` | beta2 fit shim: same shape, binds beta2 model. |
+| `fit_jax_beta2.py` | beta2 fit shim: same shape, binds beta2 model. **v2-scope — parked.** |
 | `fit_nuts.py` | **NUTS via NumPyro** wrapping our JAX `log_posterior`. `posterior_samples()` is the auto-fallback: Laplace where PD, NUTS otherwise. |
 | `fit_eb_pool.py` | **Empirical-Bayes pool on all three halflives.** One-step σ + iterated μ (avoids the iterative-σ collapse pathology — see `external_docs/pgm_tricks.md`). `Pool` namedtuple (6 fields) + `fit_eb_pool()` + `fit_independent()` baseline. |
 | `ppc.py` | **Posterior predictive checks.** Vectorized forward simulator + discrepancy stats (skew/kurt/mid-third of died-attempt taus) + Bayes p-value. Catches haz1-on-beta2-truth misspec at p≈0.01. |
@@ -75,7 +77,7 @@ python -m venv .venv
 | `external_docs/segment_model.md`, `learning_curves.md` | Model spec. Authoritative for the math. |
 | `external_docs/segment_model_hyperpriors.md` | Hyperprior layer spec (the EB pool's role). |
 | `external_docs/pgm_tricks.md` | Glossary of PGM patterns + gotchas: identifiability, ridges, joint priors, partial pooling, Neal funnel, EB σ collapse, smooth-once-isn't-smooth-twice Hessian bombs. |
-| `external_docs/nonstationary_shape.md` | Open modeling concern: moving-peaks. |
+| `external_docs/nonstationary_shape.md` | Moving-peaks design proposal. **v2-scope — parked.** |
 | `external_docs/reports/` | Snapshots: session findings, comparison results, handoff status. |
 | `CHANGELOG.md` | Dated session-by-session notes. |
 
@@ -153,20 +155,20 @@ multi-segment fits via `jax.vmap`.
 
 ## Known limitations
 
-1. **Hierarchical inference uses point-estimated hyperparameters (EB-lite),
-   not full Bayes.** The 6-field `Pool` is computed via one-step σ + iterated μ
-   (see `external_docs/pgm_tricks.md` "EB σ collapse"). For a fully Bayesian
-   answer that propagates hyperparameter uncertainty, wrap `log_posterior`
-   in NumPyro with a `plate` over segments — see `fit_nuts.py` for the
-   single-segment scaffolding.
-2. **Shape params on beta2 are static.** `mu`, `kappa`, `w` for the K=2
-   beta mixture don't have learning curves. If real data shows moving peaks
-   (`external_docs/nonstationary_shape.md`), the v2 move is `w_1(n)`.
-3. **CPU-only.** GPU bake-in via `jax[cuda12]` is a follow-on.
-4. **Label switching on beta2.** The K=2 mixture posterior has 2!=2 modes
-   (component swap). Warm-init breaks symmetry; posterior summaries
-   (Laplace, NUTS) need canonicalization to compare across seeds. See
-   `tmp/compare_haz1_vs_beta2.py:canonicalize_beta2_shape`.
+See [`V1_ESSENCE.md`](V1_ESSENCE.md) "Caveats — what NOT to claim" for the
+authoritative v1 list (log_hl_ssp bands, ssp ID weakness, find_map plateau,
+PPC scope). Items here are repo-internal developer notes that don't affect
+the v1 integration contract:
+
+- **EB pool is point-estimated (EB-lite), not full Bayes.** One-step σ +
+  iterated μ — see `external_docs/pgm_tricks.md` "EB σ collapse". For full
+  hyperparameter-uncertainty propagation, wrap `log_posterior` in a NumPyro
+  plate over segments.
+- **CPU-only.** GPU bake-in via `jax[cuda12]` is a follow-on.
+- **Label switching on beta2 (v2-parked).** The K=2 mixture posterior has
+  2!=2 modes. Warm-init breaks symmetry; canonicalize via
+  `tmp/compare_haz1_vs_beta2.py:canonicalize_beta2_shape` if needed during
+  v2 work.
 
 ## Development
 

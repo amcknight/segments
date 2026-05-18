@@ -1,6 +1,40 @@
 # Changelog
 
-## 2026-05-17 — PPC, NUTS, full halflife pool, smooth-abs bugfix, fit_core refactor, cleanup
+## 2026-05-17 (late) — v1 scope reframe, parking beta2 and shape work
+
+Mid-session scope reframe in conversation with the model consumer. Outcome:
+
+- **v1 ships haz1 only** — monotone learning on (sf, ssp, alpha) with the
+  EB pool on halflives. Static within-segment shape. No route-change
+  handling. v1 absorbs route changes into residual noise.
+- **beta2, moving-peaks, route-change handling all parked for v2** inside
+  SpinLab. Code stays in the repo with v2-scope banners; no v1 development
+  on these paths. Today's exploratory work (peak-shift synth generator,
+  tertile mid_third PPC stats, within-run sensitivity matrix) is parked v2
+  infrastructure, not v1 surface.
+- New canonical doc: [`V1_ESSENCE.md`](V1_ESSENCE.md) at repo root. Single
+  integration contract; merges what was in `external_docs/known_limitations.md`
+  (deleted) and the still-applicable parts of
+  `external_docs/reports/2026-05-17_handoff_status.md` (banner-flagged as
+  superseded but kept for history).
+- New empirical findings landed this session:
+  - **EB pool *worsens* `log_hl_ssp` coverage** despite improving the
+    point estimate. Pool tightens intervals faster than mean drifts.
+    Don't ship pool-Laplace bands on `log_hl_ssp` as 90% intervals.
+  - **`find_map` could plateau on the `-inf` penalty cliff** with scipy
+    reporting `converged=True`. Downstream NUTS init then crashed
+    cryptically. Fixed: `info['converged']` is now `scipy_success AND
+    raw_lp_finite`. Callers chaining MAP→NUTS get the honest signal.
+  - **PPC catches abrupt model misspec, not slow within-run drift.**
+    Whole-run `mid_third` is structurally blind to drift; the tertile
+    variants help on abrupt change but barely on slow drift. The
+    moving-peaks deferral relies on detection that won't fire reliably.
+    Hence the parking — no honest fix in v1 scope.
+
+Tests: 66 passing (was 45 at start of session). New tests: 16 in
+`test_shape_drift.py`, 5 tertile-stat tests in `test_ppc.py`.
+
+## 2026-05-17 (earlier) — PPC, NUTS, full halflife pool, smooth-abs bugfix, fit_core refactor, cleanup
 
 Major session. Completed steps 1-3 of plan_forward_sequence; deferred step 4
 (API contract) until shape-param learning is settled.

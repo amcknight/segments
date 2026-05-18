@@ -72,16 +72,25 @@ def lognormal_slop_params(slop_frac, slop_spread, bpt):
     return mu_log, np.sqrt(sigma_log_sq)
 
 
-def generate(n_attempts, truth, seed=0, hazard_truth='beta2'):
+def generate(n_attempts, truth, seed=0, hazard_truth='beta2', shape_at=None):
     """Generate n_attempts synthetic attempts under V07 learning curves.
 
     hazard_truth selects the conditional distribution of s_death | died:
-      'beta2' (default): mixture of K=2 Betas with truth['mu'], ['kappa'], ['w'].
+      'beta2' (default): mixture of K Betas with truth['mu'], ['kappa'], ['w'].
                          Matches the existing TRUTH_DEFAULTS shape.
       'haz1':            truncated exponential on [0, 1] with rate alpha(n).
                          The conditional density implied by constant hazard
                          h(s) = alpha. Used to generate haz1-truth synth for
                          the haz1-vs-beta2 model comparison.
+
+    shape_at: optional callable n -> (mu, kappa, w) returning per-attempt
+        beta-mixture shape. Used to exercise the non-stationary phenomena
+        from external_docs/nonstationary_shape.md. Ignored when
+        hazard_truth='haz1'. If None and hazard_truth='beta2', falls back
+        to static shape from truth['mu','kappa','w']. Builders for the 3
+        documented phenomena live in this module:
+        `static_shape`, `weight_drift_shape`, `strat_swap_shape`,
+        `strat_change_shape`.
 
     P(die per attempt) = 1 - exp(-alpha(n)) in both cases -- the two truths
     differ only in *where* deaths land within [0, 1], not how often.
@@ -95,14 +104,8 @@ def generate(n_attempts, truth, seed=0, hazard_truth='beta2'):
     log_ssp_inf, log_ssp_1 = np.log(truth['ssp_inf']),   np.log(truth['ssp_1'])
     log_a_inf, log_a_1     = np.log(truth['alpha_inf']), np.log(truth['alpha_1'])
 
-    if hazard_truth == 'beta2':
-        mu = np.asarray(truth['mu'], dtype=float)
-        kappa = np.asarray(truth['kappa'], dtype=float)
-        w = np.asarray(truth['w'], dtype=float)
-        if not np.isclose(w.sum(), 1.0):
-            raise ValueError(f"weights must sum to 1, got {w}")
-        a = mu * kappa
-        b = (1.0 - mu) * kappa
+    if hazard_truth == 'beta2' and shape_at is None:
+        shape_at = static_shape(truth['mu'], truth['kappa'], truth['w'])
 
     bpt = truth['bpt']
     rows = []
@@ -116,8 +119,11 @@ def generate(n_attempts, truth, seed=0, hazard_truth='beta2'):
         t_clean = bpt + rng.lognormal(mu_log, sigma_log)
         if rng.random() < p_die_n:
             if hazard_truth == 'beta2':
-                k = rng.choice(len(mu), p=w)
-                s_death = float(rng.beta(a[k], b[k]))
+                mu_n, kappa_n, w_n = shape_at(n)
+                k = rng.choice(len(mu_n), p=w_n)
+                a_k = mu_n[k] * kappa_n[k]
+                b_k = (1.0 - mu_n[k]) * kappa_n[k]
+                s_death = float(rng.beta(a_k, b_k))
             else:  # 'haz1' — truncated exponential with rate alpha_n on [0, 1]
                 # F(s) = (1 - exp(-alpha s)) / (1 - exp(-alpha))
                 # F^-1(u) = -log(1 - u (1 - exp(-alpha))) / alpha
@@ -129,6 +135,123 @@ def generate(n_attempts, truth, seed=0, hazard_truth='beta2'):
         else:
             rows.append(('survived', round(float(t_clean))))
     return rows
+
+
+# ---------------------------------------------------------------------------
+# Non-stationary shape builders.
+#
+# Implement the three phenomena from external_docs/nonstationary_shape.md as
+# `shape_at(n) -> (mu, kappa, w)` callables. Pass any of these to
+# `generate(..., shape_at=...)` to exercise drift truth. Built so:
+#
+#   - whole-run PPC mid_third averages out within-segment drift and won't
+#     fire reliably (the moving-peaks deferral assumes detection requires
+#     drift-aware stats, not static stats);
+#   - tertile-binned / split-half PPC stats DO fire, giving us per-phenomenon
+#     detection truth to validate proposed within-run stats against.
+#
+# kappa stays static throughout — matches the design proposal's "frozen
+# kappa" stance. The three phenomena differ only in their (mu, w) trajectories.
+# ---------------------------------------------------------------------------
+
+
+def _as_arrays(mu, kappa, w):
+    mu = np.asarray(mu, dtype=float)
+    kappa = np.asarray(kappa, dtype=float)
+    w = np.asarray(w, dtype=float)
+    if not np.isclose(w.sum(), 1.0):
+        raise ValueError(f"weights must sum to 1, got {w}")
+    return mu, kappa, w
+
+
+def static_shape(mu, kappa, w):
+    """No drift — returns the same (mu, kappa, w) at every attempt.
+
+    Equivalent to the existing beta2 truth behavior; this is the fallback
+    builder when no `shape_at` is passed.
+    """
+    mu, kappa, w = _as_arrays(mu, kappa, w)
+    def shape_at(n):
+        return mu, kappa, w
+    return shape_at
+
+
+def weight_drift_shape(mu, kappa, w_init, w_final, halflife):
+    """Phenomenon (1): thinky → muscle memory.
+
+    Weights drift smoothly from w_init to w_final via the same halflife
+    parameterization as the V07 learning curves: at attempt n,
+        w(n) = w_init + (1 - 2^(-(n-1)/halflife)) * (w_final - w_init).
+
+    Use case: at n=1 the "decision-point" component carries most weight;
+    by late attempts it has shifted to the "execution" component. mu and
+    kappa stay fixed (peak *locations* don't move, only their proportion).
+    """
+    mu, kappa, _ = _as_arrays(mu, kappa, w_init)
+    w_i = np.asarray(w_init, dtype=float)
+    w_f = np.asarray(w_final, dtype=float)
+    if not np.isclose(w_f.sum(), 1.0):
+        raise ValueError(f"w_final must sum to 1, got {w_f}")
+    if halflife <= 0:
+        raise ValueError(f"halflife must be > 0, got {halflife}")
+    def shape_at(n):
+        progress = 1.0 - 2.0 ** (-(n - 1.0) / halflife)
+        w = w_i + progress * (w_f - w_i)
+        # Re-normalize defensively: linear interp of simplex stays on simplex
+        # for w_i,w_f on simplex, but rounding can drift by ~1e-16.
+        w = w / w.sum()
+        return mu, kappa, w
+    return shape_at
+
+
+def strat_swap_shape(mu, kappa, w_before, w_after, n_swap, ramp_width=3):
+    """Phenomenon (2): section strat change.
+
+    Localized weight swap centered at attempt n_swap. ramp_width controls
+    the transition width: 0 = step function; >0 = smooth tanh over ±ramp_width
+    attempts. Defaults to 3 (smooth) since real strat adoption is rarely
+    instantaneous.
+
+    Mechanism: one peak's weight drops, another's rises. mu and kappa fixed.
+    """
+    mu, kappa, _ = _as_arrays(mu, kappa, w_before)
+    w_b = np.asarray(w_before, dtype=float)
+    w_a = np.asarray(w_after, dtype=float)
+    if not np.isclose(w_a.sum(), 1.0):
+        raise ValueError(f"w_after must sum to 1, got {w_a}")
+    if ramp_width < 0:
+        raise ValueError(f"ramp_width must be >= 0, got {ramp_width}")
+    def shape_at(n):
+        if ramp_width == 0:
+            return mu, kappa, (w_a if n >= n_swap else w_b)
+        t = (n - n_swap) / float(ramp_width)
+        alpha = 0.5 * (1.0 + np.tanh(t))
+        w = (1.0 - alpha) * w_b + alpha * w_a
+        w = w / w.sum()
+        return mu, kappa, w
+    return shape_at
+
+
+def strat_change_shape(mu_before, kappa_before, w_before,
+                       mu_after, kappa_after, w_after, n_change):
+    """Phenomenon (3): complete strat change.
+
+    All three of (mu, kappa, w) jump at attempt n_change. Step function
+    (no smooth ramp: a "complete strat change" is by definition an event,
+    not a gradual transition). Use the manual `σ_jump` flag pattern from
+    nonstationary_shape.md: model is told the break point explicitly.
+
+    The pre- and post-change shapes may have different K (different number
+    of peaks). The generator handles that since weights are length-K and
+    K can differ between the two configs.
+    """
+    mu_b, kappa_b, w_b = _as_arrays(mu_before, kappa_before, w_before)
+    mu_a, kappa_a, w_a = _as_arrays(mu_after, kappa_after, w_after)
+    def shape_at(n):
+        if n >= n_change:
+            return mu_a, kappa_a, w_a
+        return mu_b, kappa_b, w_b
+    return shape_at
 
 
 def generate_multi_segment(n_segments, n_per_segment, true_pop_log_halflife_sf_mean,
